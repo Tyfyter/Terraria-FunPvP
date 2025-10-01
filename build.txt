@@ -1,0 +1,5 @@
+displayName = Fun PvP
+author = Moonlight Glint &amp; Nova
+version = 0.1
+
+modReferences = PegasusLib

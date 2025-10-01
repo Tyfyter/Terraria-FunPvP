@@ -1,0 +1,18 @@
+# This file will automatically update with entries for new content after a build and reload.
+
+Items: {
+	Daybreaker: {
+		DisplayName: Daybreaker
+		Tooltip:
+			'''
+			Template of an item
+			Replacing this tooltip is duty 
+			It's snowing on Mt.Fuji
+			'''
+	}
+}
+
+Projectiles: {
+	Daybreaker_Floor_Fire.DisplayName: Daybreaker_ Floor_ Fire
+	Daybreaker_P.DisplayName: Daybreaker_ P
+}
