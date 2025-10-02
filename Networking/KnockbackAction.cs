@@ -2,9 +2,11 @@
 using System;
 using System.IO;
 using Terraria;
+using Terraria.ID;
 
 namespace FunPvP.Networking {
 	public record class KnockbackAction(Entity Entity, Vector2 Velocity) : SyncedAction {
+		protected override bool ShouldPerform => Entity is not NPC { type: NPCID.TargetDummy };
 		public KnockbackAction() : this(default, default) { }
 		public override SyncedAction NetReceive(BinaryReader reader) => this with {
 			Entity = ((EntityType)reader.ReadByte()) switch {

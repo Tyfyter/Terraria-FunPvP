@@ -1,10 +1,10 @@
 using FunPvP.Core;
+using FunPvP.Networking;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using PegasusLib;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using Terraria;
 using Terraria.Audio;
 using Terraria.GameContent;
@@ -12,7 +12,6 @@ using Terraria.Graphics;
 using Terraria.Graphics.Shaders;
 using Terraria.ID;
 using Terraria.ModLoader;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace FunPvP.Items {
 	public class Daybreaker : ModItem {
@@ -74,9 +73,21 @@ namespace FunPvP.Items {
 			ProjectileID.Sets.TrailingMode[Type] = 2;
 			ProjectileID.Sets.TrailCacheLength[Type] = 20;
 			ProjectileID.Sets.CanDistortWater[Type] = true;
+			(ulong inputMask, AttackSlot attack) air1;
 			StateTree = new AttackSlot(GetState<Idle>(),
-				(InputData.GetBitMask<LeftClick>(), new(GetState<Neutral>()))
+				(InputData.GetBitMask<LeftClick>(), new(GetState<Neutral>(),
+					(InputData.GetBitMask<LeftClick, Up>(), new(GetState<Spin>(),
+						(InputData.GetBitMask<LeftClick, Air>(), new(GetState<Spin_Extend>()))
+					))
+				)),
+				(InputData.GetBitMask<LeftClick, Backward>(), new(GetState<Back>())),
+				(InputData.GetBitMask<LeftClick, Down>(), new(GetState<Slam>())),
+				(InputData.GetBitMask<LeftClick, Up>(), new(GetState<Uppercut>(), 
+					(InputData.GetBitMask<LeftClick, Air>(), new(GetState<Throw>()))
+				)),
+				air1 = (InputData.GetBitMask<LeftClick, Air>(), new(GetState<Aerial1>()))
 			);
+			air1.attack.combos.Add((InputData.GetBitMask<LeftClick, Air>(), new(GetState<Aerial2>(), air1)));
 		}
 		public override void SetDefaults() {
 			Projectile.width = Projectile.height = 0;
@@ -93,6 +104,10 @@ namespace FunPvP.Items {
 		}
 		float baseRotation;
 		float swingDirectionCorrection;
+		Vector2 restPoint;
+		bool isHeld;
+		bool doResetPoof;
+		const int timeForComboBefore = 15;
 		const int timeForComboAfter = 15;
 		public override void AI() {
 			Player player = Main.player[Projectile.owner];
@@ -104,221 +119,13 @@ namespace FunPvP.Items {
 			}
 			(Vector2 pos, float rot) old = (Projectile.position, Projectile.rotation);
 			Projectile.friendly = true;
-			Vector2 restPoint = player.MountedCenter + new Vector2(-28 * player.direction, 8 * player.gravDir);
-			//if (player.direction == 1) player.compositeFrontArm.enabled = true;
-			//else player.compositeBackArm.enabled = true;
-			//if (player.GetCompositeArmPosition(false) is Vector2 handPos) restPoint = (restPoint + handPos) * 0.5f;
+			restPoint = player.MountedCenter + new Vector2(-28 * player.direction, 8 * player.gravDir);
+
 			baseRotation = (MathHelper.PiOver2 + player.direction * (MathHelper.PiOver4 * 1.65f - Projectile.stepSpeed * 0.1f)) * player.gravDir;
-			bool isHeld = true;
-			bool doResetPoof = CurrentState.attack is not IdleState && Projectile.ai[1] == Projectile.ai[2];
+			isHeld = true;
+			doResetPoof = CurrentState.attack is not IdleState && Projectile.ai[1] == Projectile.ai[2];
 			swingDirectionCorrection = player.direction * (int)player.gravDir;
 			base.AI();
-			/*switch (AIMode) {
-				case 2: {
-					float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-					//float progressScaled = (MathF.Pow(progress, 4f) / 0.85f);
-					rotation = baseRotation - MathHelper.Lerp(progressScaled * 0.25f, progressScaled, progressScaled) * 5f * swingDirectionCorrection;
-					if (Projectile.ai[1] != Projectile.ai[2]) {
-						const float speed = 24;
-						player.velocity.X += (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.direction;
-					} else Projectile.soundDelay = 1;
-					goto default;
-				}
-
-				case 3: {
-					float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-					float oldProgressScaled = GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]);
-					rotation = baseRotation + MathHelper.Lerp(progressScaled * 0.4f, progressScaled, Math.Clamp(progressScaled - 0.5f, 0, 1) * 2f) * 5 * swingDirectionCorrection;
-					if (progressScaled > 0.7f) {
-						const int rotation_steps = 3;
-						const int length_steps = 5;
-						Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
-						float oldRot = Projectile.rotation;
-						bool hitGround = false;
-						Vector2 hitPos = default;
-						for (int i = 0; i < rotation_steps; i++) {
-							float stepRot = oldRot + (float)GeometryUtils.AngleDif(oldRot, rotation) * (i + 1f) / rotation_steps;
-							Vector2 vel = new Vector2(1, 0).RotatedBy(stepRot) * (86f / length_steps) * Projectile.scale;
-							for (int j = 1; j <= length_steps; j++) {
-								Rectangle hitbox = projHitbox;
-								Vector2 offset = vel * j;
-								hitbox.Offset((int)offset.X, (int)offset.Y);
-								if (CollisionExt.OverlapsAnyTiles(hitbox)) {
-									hitGround = true;
-									hitPos = hitbox.Top();
-									rotation = stepRot;
-									break;
-								}
-							}
-						}
-						if (hitGround) {
-							int projType = ModContent.ProjectileType<Daybreaker_Floor_Fire>();
-							Projectile lastFire = null;
-							for (int i = 0; i < 18; i++) {
-								int currentFire = Projectile.NewProjectile(
-									Projectile.GetSource_FromAI(),
-									hitPos + new Vector2((i - 1) * 24 * player.direction, -32),
-									default,
-									projType,
-									Projectile.damage / 3,
-									Projectile.knockBack,
-									Projectile.owner,
-									i
-								);
-								if (lastFire is not null) lastFire.ai[2] = currentFire;
-								if (currentFire >= 0) lastFire = Main.projectile[currentFire];
-							}
-							Projectile.oldRot[0] = (rotation + MathHelper.PiOver4) + swingDirectionCorrection * 0.002f;
-							AIMode = -3;
-							int extraTime = (int)(Projectile.ai[2] * 0.4f);
-							Projectile.ai[1] += extraTime;
-							Projectile.ai[2] += extraTime;
-							//int mode = AIMode;
-							//SetAIMode(Projectile, 0, true);
-							//Projectile.localAI[0] = mode;
-							//Projectile.localAI[1] = 0;
-							//Projectile.localAI[2] = -24;
-							SoundEngine.PlaySound(SoundID.DD2_BetsyFireballImpact, Projectile.position);
-							break;
-						}
-					}
-					if (Projectile.ai[1] != Projectile.ai[2]) {
-						const float speed = 24;
-						player.velocity.X += (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.direction;
-					} else Projectile.soundDelay = 1;
-					goto default;
-				}
-
-				case -3:
-				rotation += swingDirectionCorrection * 0.001f;
-				goto default;
-
-				case 4: {
-					float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-					rotation = baseRotation - MathHelper.Lerp(progressScaled * 0.25f, progressScaled, Math.Clamp(progressScaled - 0.375f, 0, 1) * 1.6f) * 5 * swingDirectionCorrection;
-					if (Projectile.ai[1] != Projectile.ai[2]) {
-						float speed = progressScaled > 0.3f ? 196 : 0;
-						player.velocity.Y -= (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.gravDir;
-						player.velocity.Y -= player.gravity * player.gravDir;
-					}
-					if (Projectile.ai[1] <= 2) rotation = Projectile.oldRot[0] - MathHelper.PiOver4 - swingDirectionCorrection * 0.1f;
-					timeForComboAfter = 16;
-					if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = (int)(Projectile.ai[2] * 0.4f);
-					goto default;
-				}
-
-				case 5: {
-					float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-					//float progressScaled = (MathF.Pow(progress, 4f) / 0.85f);
-					rotation = Projectile.velocity.ToRotation() + (progressScaled * 5 - 3) * swingDirectionCorrection;
-					if (Projectile.ai[1] != Projectile.ai[2]) {
-						const float speed = 80;
-						player.velocity += Projectile.velocity * (GetDashSpeed(progressScaled, speed, 0.9f) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed, 0.9f));
-						player.velocity.Y -= player.gravity * player.gravDir;
-						if (funPlayer.collide.y != 0) player.velocity.Y = 0;
-					} else Projectile.soundDelay = 1;
-					goto default;
-				}
-
-				case 6: {
-					float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-					//float progressScaled = (MathF.Pow(progress, 4f) / 0.85f);
-					rotation = Projectile.velocity.ToRotation() + (3 - progressScaled * 5) * swingDirectionCorrection;
-					if (Projectile.ai[1] != Projectile.ai[2]) {
-						const float speed = 40;
-						player.velocity += Projectile.velocity * (GetDashSpeed(progressScaled, speed, 0.9f) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed, 0.9f));
-						player.velocity.Y -= player.gravity * player.gravDir;
-						if (funPlayer.collide.y != 0) player.velocity.Y = 0;
-					} else Projectile.soundDelay = 1;
-					goto default;
-				}
-
-				case 14: {
-					if (Projectile.ai[1] == Projectile.ai[2]) player.velocity += new Vector2(6 * player.direction, -8);
-					if (player.velocity.X * player.direction < 12) player.velocity.X = player.direction * 12;
-					float spin = player.direction * 0.5f;
-					rotation += spin;
-					if (Projectile.ai[2] - Projectile.ai[1] < 7) rotation += spin;
-					player.fullRotation += spin;
-					player.fullRotationOrigin = player.Size * 0.5f;
-					if (Projectile.ai[1] == 1) player.fullRotation = 0;
-					if (Projectile.ai[1] < 10 && Projectile.localAI[2] > 0) {
-						Projectile.localAI[2]++;
-					}
-					if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = 1;
-					else if (Projectile.soundDelay == 0) Projectile.soundDelay = 13;
-					goto default;
-				}
-
-				case 145: {
-					float spin = player.direction * 0.5f;
-					rotation += spin;
-					player.fullRotation += spin;
-					player.fullRotationOrigin = player.Size * 0.5f;
-					player.wingTime = 0;
-					if (Projectile.soundDelay == 0) Projectile.soundDelay = 13;
-					if (funPlayer.collide.y == player.gravDir || Projectile.ai[1] == 1) {
-						player.fullRotation = 0;
-						for (int i = 0; i < 5; i++) {
-							if (Math.Sin(rotation) < -0.5f) {
-								SetAIMode(Projectile, 3, true);
-								Projectile.ai[1] = (int)(Projectile.ai[2] * 0.4f);
-								break;
-							}
-							rotation += spin * 0.1f;
-						}
-						if (AIMode != 3 && Projectile.ai[1] == 1) Projectile.ai[1]++;
-					}
-					goto default;
-				}
-
-				case 45: {
-					const float depth = 48;
-					rotation = Projectile.velocity.ToRotation();
-					if (Projectile.ai[1] == Projectile.ai[2]) player.velocity -= Projectile.velocity * 8;
-					Projectile.position += Projectile.velocity * depth;
-					Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
-					if (!projHitbox.OverlapsAnyTiles()) {
-						const float range = 15 * 16;
-						if (Projectile.DistanceSQ(restPoint) < range * range && Projectile.ai[1] < Projectile.ai[2] - 1) {
-							Projectile.ai[1]++;
-						}
-						for (int i = 0; i < 4; i++) {
-							Projectile.position += Projectile.velocity * 8;
-							projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
-							if (projHitbox.OverlapsAnyTiles()) {
-								SoundEngine.PlaySound(SoundID.Item14, Projectile.position);
-								break;
-							}
-						}
-					}
-					Projectile.position -= Projectile.velocity * depth;
-					if (Projectile.ai[1] == 1) {
-						rotation = baseRotation;
-						Projectile.position = restPoint;
-						doResetPoof = true;
-					} else {
-						isHeld = false;
-					}
-					if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = 1;
-					goto default;
-				}
-
-				default:
-				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
-				if (Projectile.soundDelay == 1) {
-					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
-					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
-				}
-				if (--Projectile.ai[1] <= 0) {
-					int mode = AIMode;
-					Projectile.localAI[0] = mode;
-					SetAIMode(Projectile, (int)Projectile.localAI[1], true);
-					Projectile.localAI[1] = 0;
-					Projectile.localAI[2] = -timeForComboAfter;
-				}
-				break;
-			}*/
 			if (isHeld) {
 				player.SetCompositeArm(false, Player.CompositeArmStretchAmount.Full, (Projectile.rotation - MathHelper.PiOver2) * player.gravDir, true);
 				Projectile.position = player.GetCompositeArmPosition(false).Value;
@@ -386,30 +193,6 @@ namespace FunPvP.Items {
 		public override void OnHit(Entity target, HitInfo hitInfo) {
 			target.AddBuff(BuffID.OnFire3, Main.rand.Next(300, 480));
 		}
-		/*public override void OnHitNPC(NPC target, NPC.HitInfo hit, int damageDone) {
-			//SoundEngine.PlaySound((hit.Crit ? SoundID.DD2_MonkStaffGroundImpact : SoundID.DD2_MonkStaffGroundMiss).WithPitchRange(-0.2f, 0.0f), target.Center);
-			switch (AIMode) {
-				case 2:
-				target.velocity.Y -= hit.Knockback * target.knockBackResist * 2f;
-				break;
-
-				case 3:
-				target.AddBuff(BuffID.OnFire3, 300);
-				break;
-
-				case 4:
-				target.velocity.Y -= hit.Knockback * target.knockBackResist * 4f;
-				break;
-
-				case 12:
-				target.velocity.X += hit.HitDirection * hit.Knockback * target.knockBackResist * 2f;
-				break;
-
-				case 14 or 145:
-				target.AddBuff(BuffID.OnFire3, 120);
-				break;
-			}
-		}*/
 		public override bool TileCollideStyle(ref int width, ref int height, ref bool fallThrough, ref Vector2 hitboxCenterFrac) => false;
 		public override bool CanHitPvp(Player target) => Projectile.ai[0] != 0;
 		public override bool? Colliding(Rectangle projHitbox, Rectangle targetHitbox) {
@@ -447,31 +230,40 @@ namespace FunPvP.Items {
 		public override void DrawBehind(int index, List<int> behindNPCsAndTiles, List<int> behindNPCs, List<int> behindProjectiles, List<int> overPlayers, List<int> overWiresUI) {
 			behindNPCsAndTiles.Add(index);
 		}
-		static float GetProgressScaled(float ai1, float ai2) {
-			float progress = MathHelper.Clamp(1 - (ai1 / ai2), 0, 1);
-			return MathHelper.Lerp(MathF.Pow(progress, 4f), MathF.Pow(progress, 0.25f), progress * progress);
-		}
-		static float GetDashSpeed(float progressScaled, float speed, float ratio = 0.8f) => (progressScaled * speed - progressScaled * progressScaled * speed * ratio);
-		public class Idle : IdleState {
-			public override void Update(Player player, PvPProjectile projectile) {
-				Projectile Projectile = projectile.Projectile;
-				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
-				Projectile.friendly = false;
-				if (Projectile.localAI[2] != 0) {
-					GeometryUtils.AngleDif(Projectile.rotation, baseRotation, out int oldDir);
-					Projectile.rotation += (Projectile.oldRot[0] - Projectile.oldRot[1]) * 0.9f;
-					GeometryUtils.AngleDif(Projectile.rotation, baseRotation, out int newDir);
-					if (oldDir != newDir) Projectile.rotation = baseRotation;
-					return;
-				}
-				Projectile.rotation += (float)GeometryUtils.AngleDif(Projectile.rotation, baseRotation) * 0.2f;
+		public void DoRestingPosition() {
+			Player player = Main.player[Projectile.owner];
+			Projectile.friendly = false;
+			if (CurrentState != StateTree) {
+				GeometryUtils.AngleDif(Projectile.rotation, baseRotation, out int oldDir);
+				Projectile.rotation += (Projectile.oldRot[0] - Projectile.oldRot[1]) * 0.9f;
+				GeometryUtils.AngleDif(Projectile.rotation, baseRotation, out int newDir);
+				if (oldDir != newDir) Projectile.rotation = baseRotation;
+				return;
+			}
+			Projectile.rotation += (float)GeometryUtils.AngleDif(Projectile.rotation, baseRotation) * 0.2f;
 
-				Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
-				Rectangle resultHitbox = default;
-				for (int i = 0; i < 4; i++) {
-					const int length_steps = 5;
-					bool hitGround = false;
-					Vector2 vel = new Vector2(1, 0).RotatedBy(baseRotation + 0.1f * player.direction) * (86f / length_steps) * Projectile.scale;
+			Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
+			Rectangle resultHitbox = default;
+			for (int i = 0; i < 4; i++) {
+				const int length_steps = 5;
+				bool hitGround = false;
+				Vector2 vel = new Vector2(1, 0).RotatedBy(baseRotation + 0.1f * player.direction) * (86f / length_steps) * Projectile.scale;
+				for (int j = 1; j <= length_steps; j++) {
+					Rectangle hitbox = projHitbox;
+					Vector2 offset = vel * j;
+					hitbox.Offset((int)offset.X, (int)offset.Y);
+					if (CollisionExt.OverlapsAnyTiles(hitbox)) {
+						hitGround = true;
+						resultHitbox = hitbox;
+						break;
+					}
+				}
+				if (hitGround) {
+					Projectile.stepSpeed -= 0.25f;
+					baseRotation += 0.25f * 0.1f * player.direction;
+				} else {
+					hitGround = false;
+					vel = new Vector2(1, 0).RotatedBy(baseRotation - (Projectile.stepSpeed + 0.5f - 1f) * 0.1f * player.direction) * (86f / length_steps) * Projectile.scale;
 					for (int j = 1; j <= length_steps; j++) {
 						Rectangle hitbox = projHitbox;
 						Vector2 offset = vel * j;
@@ -482,61 +274,61 @@ namespace FunPvP.Items {
 							break;
 						}
 					}
-					if (hitGround) {
-						Projectile.stepSpeed -= 0.25f;
-						baseRotation += 0.25f * 0.1f * player.direction;
-					} else {
-						hitGround = false;
-						vel = new Vector2(1, 0).RotatedBy(baseRotation - (Projectile.stepSpeed + 0.5f - 1f) * 0.1f * player.direction) * (86f / length_steps) * Projectile.scale;
-						for (int j = 1; j <= length_steps; j++) {
-							Rectangle hitbox = projHitbox;
-							Vector2 offset = vel * j;
-							hitbox.Offset((int)offset.X, (int)offset.Y);
-							if (CollisionExt.OverlapsAnyTiles(hitbox)) {
-								hitGround = true;
-								resultHitbox = hitbox;
-								break;
-							}
-						}
-						if (!hitGround) {
-							Projectile.stepSpeed += 0.25f;
-							baseRotation -= 0.25f * 0.1f * player.direction;
-						}
+					if (!hitGround) {
+						Projectile.stepSpeed += 0.25f;
+						baseRotation -= 0.25f * 0.1f * player.direction;
 					}
 				}
-				if (Math.Abs(player.velocity.X) > 4f && resultHitbox != default) {
-					Dust dust = Dust.NewDustDirect(
-						resultHitbox.BottomLeft(),
-						resultHitbox.Width,
-						0,
-						DustID.MinecartSpark
-					);
-					dust.noGravity = false;
-					dust.velocity.Y -= 2;
-				}
-				Projectile.stepSpeed = MathHelper.Clamp(Projectile.stepSpeed, -1.5f, 1.5f);
+			}
+			if (Math.Abs(player.velocity.X) > 4f && resultHitbox != default) {
+				Dust dust = Dust.NewDustDirect(
+					resultHitbox.BottomLeft(),
+					resultHitbox.Width,
+					0,
+					DustID.MinecartSpark
+				);
+				dust.noGravity = false;
+				dust.velocity.Y -= 2;
+			}
+			Projectile.stepSpeed = MathHelper.Clamp(Projectile.stepSpeed, -1.5f, 1.5f);
+		}
+		public override void DefaultAttackSetup(Player player) {
+			GetStats(out float damage, out float useTime, out float knockback, out float armorPenetration);
+			Projectile.damage = (int)damage;
+			Projectile.knockBack = knockback;
+			Projectile.ArmorPenetration = (int)armorPenetration;
+			useTime = (int)useTime;
+			Projectile.ai[1] = useTime;
+			Projectile.ai[2] = useTime;
+			Projectile.velocity = Main.MouseWorld - player.MountedCenter;
+			Projectile.velocity.Normalize();
+		}
+		static float GetProgressScaled(float ai1, float ai2) {
+			float progress = MathHelper.Clamp(1 - (ai1 / ai2), 0, 1);
+			return MathHelper.Lerp(MathF.Pow(progress, 4f), MathF.Pow(progress, 0.25f), progress * progress);
+		}
+		static float GetDashSpeed(float progressScaled, float speed, float ratio = 0.8f) => (progressScaled * speed - progressScaled * progressScaled * speed * ratio);
+		public class Idle : IdleState {
+			public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+				projectile.Projectile.ai[0] = 0;
+				projectile.Projectile.ai[1] = 0;
+				projectile.Projectile.ai[2] = 0;
+			}
+			public override void Update(Player player, PvPProjectile projectile) {
+				((Daybreaker_P)projectile).DoRestingPosition();
 			}
 		}
 		public class Neutral : Attack {
-			public override void OnStart(Player player, PvPProjectile projectile) {
-				if (player.whoAmI != Main.myPlayer) return;
-				Projectile Projectile = projectile.Projectile;
-				projectile.GetStats(out float damage, out float useTime, out float knockback, out float armorPenetration);
-				Projectile.damage = (int)damage;
-				Projectile.knockBack = knockback;
-				Projectile.ArmorPenetration = (int)armorPenetration;
-				useTime = (int)useTime;
-				Projectile.ai[1] = useTime;
-				Projectile.ai[2] = useTime;
-				Projectile.velocity = Main.MouseWorld - player.MountedCenter;
-				Projectile.velocity.Normalize();
-			}
 			public override void Update(Player player, PvPProjectile projectile) {
 				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
 				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
 				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
 				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
-				//float progressScaled = (MathF.Pow(progress, 4f) / 0.85f);
 				Projectile.rotation = baseRotation + progressScaled * 5 * swingDirectionCorrection;
 				if (Projectile.ai[1] != Projectile.ai[2]) {
 					const float speed = 48;
@@ -551,8 +343,373 @@ namespace FunPvP.Items {
 			}
 			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
 				Projectile Projectile = projectile.Projectile;
-				canBuffer = --Projectile.ai[1] <= 0;
-				return Projectile.ai[1] <= -timeForComboAfter;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
+			}
+		}
+		public class Back : Attack {
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
+				Projectile.rotation = baseRotation - MathHelper.Lerp(progressScaled * 0.25f, progressScaled, progressScaled) * 5f * swingDirectionCorrection;
+				if (Projectile.ai[1] != Projectile.ai[2]) {
+					const float speed = 24;
+					player.velocity.X += (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.direction;
+				} else Projectile.soundDelay = 1;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
+			}
+			public override void OnHit(Entity target, PvPProjectile projectile, HitInfo hitInfo) {
+				new KnockbackAction(target, target.velocity + Vector2.UnitX * hitInfo.HitDirection * (hitInfo.Knockback + projectile.Projectile.knockBack)).Perform();
+			}
+		}
+		public class Slam : Attack {
+			public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+				base.OnStart(player, projectile, previousState);
+				if (previousState is Neutral) player.velocity.X *= 0.5f;
+			}
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+				if (Projectile.ai[0] == 1) {
+					Projectile.rotation += swingDirectionCorrection * 0.001f;
+					return;
+				}
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+
+				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
+				float oldProgressScaled = GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]);
+				Projectile.rotation = baseRotation + MathHelper.Lerp(progressScaled * 0.4f, progressScaled, Math.Clamp(progressScaled - 0.5f, 0, 1) * 2f) * 5 * swingDirectionCorrection;
+				if (progressScaled > 0.7f) {
+					const int rotation_steps = 3;
+					const int length_steps = 5;
+					Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
+					float oldRot = Projectile.rotation;
+					bool hitGround = false;
+					Vector2 hitPos = default;
+					for (int i = 0; i < rotation_steps; i++) {
+						float stepRot = oldRot + (float)GeometryUtils.AngleDif(oldRot, Projectile.rotation) * (i + 1f) / rotation_steps;
+						Vector2 vel = new Vector2(1, 0).RotatedBy(stepRot) * (86f / length_steps) * Projectile.scale;
+						for (int j = 1; j <= length_steps; j++) {
+							Rectangle hitbox = projHitbox;
+							Vector2 offset = vel * j;
+							hitbox.Offset((int)offset.X, (int)offset.Y);
+							if (CollisionExt.OverlapsAnyTiles(hitbox)) {
+								hitGround = true;
+								hitPos = hitbox.Top();
+								Projectile.rotation = stepRot;
+								break;
+							}
+						}
+					}
+					if (hitGround) {
+						int projType = ModContent.ProjectileType<Daybreaker_Floor_Fire>();
+						Projectile lastFire = null;
+						for (int i = 0; i < 18; i++) {
+							int currentFire = Projectile.NewProjectile(
+								Projectile.GetSource_FromAI(),
+								hitPos + new Vector2((i - 1) * 24 * player.direction, -32),
+								default,
+								projType,
+								Projectile.damage / 3,
+								Projectile.knockBack,
+								Projectile.owner,
+								i
+							);
+							if (lastFire is not null) lastFire.ai[2] = currentFire;
+							if (currentFire >= 0) lastFire = Main.projectile[currentFire];
+						}
+						Projectile.oldRot[0] = Projectile.rotation + swingDirectionCorrection * 0.002f;
+						Projectile.ai[0] = 1;
+						int extraTime = (int)(Projectile.ai[2] * 0.4f);
+						Projectile.ai[1] += extraTime;
+						Projectile.ai[2] += extraTime;
+
+						SoundEngine.PlaySound(SoundID.DD2_BetsyFireballImpact, Projectile.position);
+						return;
+					}
+				}
+				if (Projectile.ai[1] != Projectile.ai[2]) {
+					const float speed = 24;
+					player.velocity.X += (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.direction;
+				} else Projectile.soundDelay = 1;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
+			}
+		}
+		public class Uppercut : Attack {
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
+				Projectile.rotation = baseRotation - MathHelper.Lerp(progressScaled * 0.25f, progressScaled, Math.Clamp(progressScaled - 0.375f, 0, 1) * 1.6f) * 5 * swingDirectionCorrection;
+				if (Projectile.ai[1] != Projectile.ai[2]) {
+					float speed = progressScaled > 0.3f ? 196 : 0;
+					player.velocity.Y -= (GetDashSpeed(progressScaled, speed) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed)) * player.gravDir;
+					player.velocity.Y -= player.gravity * player.gravDir;
+				}
+				if (Projectile.ai[1] <= 2) Projectile.rotation = Projectile.oldRot[0] - swingDirectionCorrection * 0.1f;
+
+				if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = (int)(Projectile.ai[2] * 0.4f);
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter + 1, out canBuffer);
+
+			}
+			public override void OnHit(Entity target, PvPProjectile projectile, HitInfo hitInfo) {
+				new KnockbackAction(target, target.velocity + Vector2.UnitY * (hitInfo.Knockback + projectile.Projectile.knockBack) * 2f).Perform();
+			}
+		}
+		public class Aerial1 : Attack {
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
+
+				Projectile.rotation = Projectile.velocity.ToRotation() + (progressScaled * 5 - 3) * swingDirectionCorrection;
+				if (Projectile.ai[1] != Projectile.ai[2]) {
+					const float speed = 80;
+					player.velocity += Projectile.velocity * (GetDashSpeed(progressScaled, speed, 0.9f) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed, 0.9f));
+					player.velocity.Y -= player.gravity * player.gravDir;
+					if (player.GetModPlayer<FunPlayer>().collide.y != 0) player.velocity.Y = 0;
+				} else Projectile.soundDelay = 1;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
+			}
+		}
+		public class Aerial2 : Attack {
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				float progressScaled = GetProgressScaled(Projectile.ai[1], Projectile.ai[2]);
+
+				Projectile.rotation = Projectile.velocity.ToRotation() + (3 - progressScaled * 5) * swingDirectionCorrection;
+				if (Projectile.ai[1] != Projectile.ai[2]) {
+					const float speed = 40;
+					player.velocity += Projectile.velocity * (GetDashSpeed(progressScaled, speed, 0.9f) - GetDashSpeed(GetProgressScaled(Projectile.ai[1] + 1, Projectile.ai[2]), speed, 0.9f));
+					player.velocity.Y -= player.gravity * player.gravDir;
+					if (player.GetModPlayer<FunPlayer>().collide.y != 0) player.velocity.Y = 0;
+				} else Projectile.soundDelay = 1;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
+			}
+		}
+		public class Throw : Attack {
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				Daybreaker_P daybreaker = (Daybreaker_P)projectile;
+				if (Projectile.ai[1] <= 0) {
+					daybreaker.DoRestingPosition();
+					return;
+				}
+				float baseRotation = daybreaker.baseRotation;
+				float swingDirectionCorrection = daybreaker.swingDirectionCorrection;
+
+
+				const float depth = 48;
+				Projectile.rotation = Projectile.velocity.ToRotation();
+				if (Projectile.ai[1] == Projectile.ai[2]) player.velocity -= Projectile.velocity * 8;
+				Projectile.position += Projectile.velocity * depth;
+				Rectangle projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
+				if (!projHitbox.OverlapsAnyTiles()) {
+					const float range = 15 * 16;
+					if (Projectile.DistanceSQ(daybreaker.restPoint) < range * range && Projectile.ai[1] < Projectile.ai[2] - 1) {
+						Projectile.ai[1]++;
+					}
+					for (int i = 0; i < 4; i++) {
+						Projectile.position += Projectile.velocity * 8;
+						projHitbox = new((int)Projectile.position.X - 6, (int)Projectile.position.Y - 6, 12, 12);
+						if (projHitbox.OverlapsAnyTiles()) {
+							SoundEngine.PlaySound(SoundID.Item14, Projectile.position);
+							break;
+						}
+					}
+				}
+				Projectile.position -= Projectile.velocity * depth;
+				if (Projectile.ai[1] == 1) {
+					Projectile.rotation = baseRotation;
+					Projectile.position = daybreaker.restPoint;
+					daybreaker.doResetPoof = true;
+				} else {
+					daybreaker.isHeld = false;
+				}
+				if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = 1;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, 0, out canBuffer);
+			}
+		}
+		public class Spin : Attack {
+			public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+				Projectile Projectile = projectile.Projectile;
+				projectile.GetStats(out float damage, out float useTime, out float knockback, out float armorPenetration);
+				Projectile.damage = (int)damage;
+				Projectile.knockBack = knockback;
+				Projectile.ArmorPenetration = (int)armorPenetration;
+				useTime = (int)(useTime * 1.5f);
+				Projectile.ai[1] = useTime;
+				Projectile.ai[2] = useTime;
+				Projectile.velocity = Main.MouseWorld - player.MountedCenter;
+				Projectile.velocity.Normalize();
+			}
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				if (Projectile.ai[1] == Projectile.ai[2]) player.velocity += new Vector2(6 * player.direction, -8);
+				if (player.velocity.X * player.direction < 12) player.velocity.X = player.direction * 12;
+				float spin = player.direction * 0.5f;
+				Projectile.rotation += spin;
+				if (Projectile.ai[2] - Projectile.ai[1] < 7) Projectile.rotation += spin;
+				player.fullRotation += spin;
+				player.fullRotationOrigin = player.Size * 0.5f;
+				if (Projectile.ai[1] == 1) player.fullRotation = 0;
+				if (Projectile.ai[1] == Projectile.ai[2]) Projectile.soundDelay = 1;
+				else if (Projectile.soundDelay == 0) Projectile.soundDelay = 13;
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore + 10, 5, out canBuffer);
+			}
+		}
+		public class Spin_Extend : Attack {
+			public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+				Projectile Projectile = projectile.Projectile;
+				projectile.GetStats(5 * 60, out float damage, out float useTime, out float knockback, out float armorPenetration);
+				Projectile.damage = (int)damage;
+				Projectile.knockBack = knockback;
+				Projectile.ArmorPenetration = (int)armorPenetration;
+				useTime = (int)useTime;
+				Projectile.ai[1] = useTime;
+				Projectile.ai[2] = useTime;
+				Projectile.velocity = Main.MouseWorld - player.MountedCenter;
+				Projectile.velocity.Normalize();
+			}
+			public override void Update(Player player, PvPProjectile projectile) {
+				Projectile Projectile = projectile.Projectile;
+				if (Projectile.ai[1] <= 0) {
+					((Daybreaker_P)projectile).DoRestingPosition();
+					return;
+				}
+				float baseRotation = ((Daybreaker_P)projectile).baseRotation;
+				float swingDirectionCorrection = ((Daybreaker_P)projectile).swingDirectionCorrection;
+
+				float spin = player.direction * 0.5f;
+				Projectile.rotation += spin;
+				player.fullRotation += spin;
+				player.fullRotationOrigin = player.Size * 0.5f;
+				player.wingTime = 0;
+				if (Projectile.soundDelay == 0) Projectile.soundDelay = 13;
+				if (player.GetModPlayer<FunPlayer>().collide.y == player.gravDir || Projectile.ai[1] == 1) {
+					player.fullRotation = 0;
+					bool doSlam = false;
+					for (int i = 0; i < 5; i++) {
+						if (Math.Sin(Projectile.rotation) < -0.5f) {
+							projectile.CurrentState = new(ModContent.GetInstance<Slam>());
+							projectile.CurrentState.attack.OnStart(player, projectile, this);
+							doSlam = true;
+							Projectile.ai[1] = (int)(Projectile.ai[2] * 0.4f);
+							break;
+						}
+						Projectile.rotation += spin * 0.1f;
+					}
+					if (!doSlam && Projectile.ai[1] == 1) Projectile.ai[1]++;
+				}
+
+				Projectile.stepSpeed -= 0.05f * Math.Sign(Projectile.stepSpeed);
+				if (Projectile.soundDelay == 1) {
+					SoundEngine.PlaySound(SoundID.Item71, Projectile.position);
+					SoundEngine.PlaySound(SoundID.DD2_BetsyFireballShot, Projectile.position);
+				}
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				Projectile Projectile = projectile.Projectile;
+				return ComboWindow(projectile, --Projectile.ai[1], timeForComboBefore, timeForComboAfter, out canBuffer);
 			}
 		}
 	}
@@ -569,7 +726,7 @@ namespace FunPvP.Items {
 
 		public float Length;
 		public readonly void Draw(Projectile proj) {
-			if (proj.ai[0] == 0) return;
+			if (proj?.ModProjectile is not Daybreaker_P sword || sword.CurrentState == sword.StateTree) return;
 			MiscShaderData miscShaderData = GameShaders.Misc["FlameLash"];
 			miscShaderData.UseSaturation(-1f);
 			miscShaderData.UseOpacity(4);
@@ -581,7 +738,7 @@ namespace FunPvP.Items {
 			Vector2 move = new Vector2(Length * 0.65f, 0) * proj.direction;
 			GeometryUtils.AngleDif(proj.oldRot[1], proj.oldRot[0], out int dir);
 			for (int i = 0; i < maxLength; i++) {
-				oldRot[i] = proj.oldRot[i] + MathHelper.PiOver4 + MathHelper.PiOver2 * (1 - dir);
+				oldRot[i] = proj.oldRot[i] + MathHelper.PiOver4 * 2 + MathHelper.PiOver2 * (1 - dir);
 				oldPos[i] = proj.oldPos[i] + move.RotatedBy(oldRot[i] - MathHelper.PiOver2 * proj.direction) * dir;
 			}
 			//spriteDirections = proj.oldSpriteDirection;

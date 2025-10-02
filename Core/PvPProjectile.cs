@@ -39,26 +39,31 @@ namespace FunPvP.Core {
 			Player player = Main.player[Projectile.owner];
 			CurrentState.attack.Update(player, this);
 			bool endAttack = CurrentState.attack.CheckFinished(player, this, out bool canBuffer);
-			if (canBuffer && CurrentState.GetCombo(InputData.GetBitMask(player)) is AttackSlot nextAttack) {
+			if (canBuffer && (CurrentState.GetCombo(InputData.GetBitMask(player)) ?? StateTree.GetCombo(InputData.GetBitMask(player))) is AttackSlot nextAttack) {
 				BufferedState = nextAttack;
 			}
 			if (endAttack) {
+				AttackSlot previousState = CurrentState;
 				CurrentState = BufferedState;
 				BufferedState = null;
-				currentState.attack.OnStart(player, this);
+				currentState.attack.OnStart(player, this, previousState.attack);
 			}
 		}
 		public sealed override void ModifyHitPlayer(Player target, ref Player.HurtModifiers modifiers) {
 			ModifyHit(target, new(ref modifiers));
+			CurrentState.attack.ModifyHit(target, this, new(ref modifiers));
 		}
 		public sealed override void ModifyHitNPC(NPC target, ref NPC.HitModifiers modifiers) {
 			ModifyHit(target, new(ref modifiers));
+			CurrentState.attack.ModifyHit(target, this, new(ref modifiers));
 		}
 		public sealed override void OnHitPlayer(Player target, Player.HurtInfo info) {
 			OnHit(target, new(info));
+			CurrentState.attack.OnHit(target, this, new(info));
 		}
 		public sealed override void OnHitNPC(NPC target, NPC.HitInfo hit, int damageDone) {
 			OnHit(target, new(hit));
+			CurrentState.attack.OnHit(target, this, new(hit));
 		}
 		public virtual void ModifyHit(Entity target, HitModifiers modifiers) { }
 		public virtual void OnHit(Entity target, HitInfo hitInfo) { }
@@ -70,13 +75,15 @@ namespace FunPvP.Core {
 			int type = reader.ReadInt32();
 			int bufferType = reader.ReadInt32();
 			if (Projectile.owner != Main.myPlayer) {
-				int oldAttack = currentState.attack.Type;
+				Attack oldState = currentState.attack;
 				currentState = new AttackSlot(Attack.byType[type]);
 				bufferedState = new AttackSlot(Attack.byType[bufferType]);
-				if (currentState.attack.Type != oldAttack) currentState.attack.OnStart(Main.player[Projectile.owner], this);
+				if (currentState.attack.Type != oldState.Type) currentState.attack.OnStart(Main.player[Projectile.owner], this, oldState);
 			}
 		}
-		public void GetStats(out float damage, out float useTime, out float knockback, out float armorPenetration) {
+		public virtual void DefaultAttackSetup(Player player) { }
+		public void GetStats(out float damage, out float useTime, out float knockback, out float armorPenetration) => GetStats(Main.player[Projectile.owner].HeldItem.useAnimation, out damage, out useTime, out knockback, out armorPenetration);
+		public void GetStats(int baseUseTime, out float damage, out float useTime, out float knockback, out float armorPenetration) {
 			Player player = Main.player[Projectile.owner];
 			Item item = player.HeldItem;
 			StatModifier damageMod = player.GetTotalDamage(item.DamageType);
@@ -84,7 +91,7 @@ namespace FunPvP.Core {
 			StatModifier knockbackMod = player.GetTotalKnockback(item.DamageType);
 			CombinedHooks.ModifyWeaponKnockback(player, item, ref knockbackMod);
 			damage = damageMod.ApplyTo(item.damage);
-			useTime = CombinedHooks.TotalAnimationTime(item.useAnimation, player, item);
+			useTime = CombinedHooks.TotalAnimationTime(baseUseTime, player, item);
 			knockback = knockbackMod.ApplyTo(item.knockBack);
 			armorPenetration = item.ArmorPenetration + player.GetTotalArmorPenetration(item.DamageType);
 		}
@@ -157,25 +164,34 @@ namespace FunPvP.Core {
 		/// <summary>
 		/// Called on all sides when this attack is started
 		/// </summary>
-		public abstract void OnStart(Player player, PvPProjectile projectile);
+		public virtual void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+			if (player.whoAmI != Main.myPlayer) return;
+			projectile.DefaultAttackSetup(player);
+		}
 		public abstract void Update(Player player, PvPProjectile projectile);
 		public abstract bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer);
-		public virtual void OnHit(Entity target) { }
+		public virtual void ModifyHit(Entity target, PvPProjectile projectile, HitModifiers modifiers) { }
+		public virtual void OnHit(Entity target, PvPProjectile projectile, HitInfo hitInfo) { }
+		public static bool ComboWindow(PvPProjectile projectile, float timer, float preBufferFrames, float hangTime, out bool canBuffer) {
+			canBuffer = timer <= preBufferFrames;
+			return timer <= -hangTime || (timer <= 0 && projectile.BufferedState.attack is not IdleState);
+		}
 	}
 	public abstract class IdleState : Attack {
-		public override void OnStart(Player player, PvPProjectile projectile) { }
+		public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) { }
 		public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
 			canBuffer = true;
 			return projectile.BufferedState.attack is not IdleState;
 		}
 	}
 	public class AttackSlot(Attack attack, params (ulong inputMask, AttackSlot attack)[] combos) {
+		public List<(ulong inputMask, AttackSlot attack)> combos = [..combos];
 		public readonly Attack attack = attack;
 		public AttackSlot GetCombo(ulong inputMask) {
 			if (inputMask == 0) return null;
 			ulong bestMatch = 0;
 			AttackSlot bestAttack = null;
-			for (int i = 0; i < combos.Length; i++) {
+			for (int i = 0; i < combos.Count; i++) {
 				ulong combined = combos[i].inputMask & inputMask;
 				if (combined == combos[i].inputMask && (combined > bestMatch || bestAttack is null)) {
 					bestMatch = combined;
@@ -184,78 +200,5 @@ namespace FunPvP.Core {
 			}
 			return bestAttack;
 		}
-	}
-	public abstract class InputData : ILoadable {
-		static readonly List<InputData> byType = [];
-		static List<InputData> byPriority = [];
-		public int Type { get; private set; }
-		public int PriorityType { get; private set; }
-		public abstract float Priority { get; }
-		public abstract bool IsActive(Player player);
-		public void Load(Mod mod) {
-			if (mod.Side != ModSide.Both) throw new InvalidOperationException("InputData can only be added by Both-side mods");
-			Type = byType.Count;
-			byType.Add(this);
-		}
-		public void Unload() { }
-		internal static void CreatePriorityList() {
-			if (byType is null) return;
-			byPriority = byType.OrderBy(x => x.Priority).ToList();
-			for (int i = 0; i < byPriority.Count; i++) {
-				byPriority[i].PriorityType = i;
-			}
-		}
-		public static ulong GetBitMask(Player player) {
-			ulong mask = 0;
-			for (int i = 0; i < byPriority.Count; i++) {
-				if (byPriority[i].IsActive(player)) mask |= 1ul << i;
-			}
-			return mask;
-		}
-		public static ulong GetBitMask(params InputData[] inputDatas) {
-			ulong mask = 0;
-			for (int i = 0; i < inputDatas.Length; i++) {
-				mask |= 1ul << inputDatas[i].PriorityType;
-			}
-			return mask;
-		}
-		public static ulong GetBitMask<TInput1>() where TInput1 : InputData => GetBitMask(ModContent.GetInstance<TInput1>());
-		public static ulong GetBitMask<TInput1, TInput2>() where TInput1 : InputData where TInput2 : InputData => GetBitMask(
-			ModContent.GetInstance<TInput1>(),
-			ModContent.GetInstance<TInput2>()
-		);
-		public static ulong GetBitMask<TInput1, TInput2, TInput3>() where TInput1 : InputData where TInput2 : InputData where TInput3 : InputData => GetBitMask(
-			ModContent.GetInstance<TInput1>(),
-			ModContent.GetInstance<TInput2>(),
-			ModContent.GetInstance<TInput3>()
-		);
-	}
-	public class LeftClick : InputData {
-		public override float Priority { get; } = 9998;
-		public override bool IsActive(Player player) => player.controlUseItem && player.GetModPlayer<FunPlayer>().releaseUseItem;
-	}
-	public class RightClick : InputData {
-		public override float Priority { get; } = 9999;
-		public override bool IsActive(Player player) => player.controlUseTile && player.releaseUseTile;
-	}
-	public class Forward : InputData {
-		public override float Priority { get; } = 0;
-		public override bool IsActive(Player player) => player.direction == -1 ? player.controlLeft : player.controlRight;
-	}
-	public class Backward : InputData {
-		public override float Priority { get; } = 0;
-		public override bool IsActive(Player player) => player.direction == -1 ? player.controlRight : player.controlLeft;
-	}
-	public class Up : InputData {
-		public override float Priority { get; } = 0;
-		public override bool IsActive(Player player) => player.controlUp;
-	}
-	public class Down : InputData {
-		public override float Priority { get; } = 0;
-		public override bool IsActive(Player player) => player.controlDown;
-	}
-	public class Air : InputData {
-		public override float Priority { get; } = 1;
-		public override bool IsActive(Player player) => player.GetModPlayer<FunPlayer>().collide.y == 0;
 	}
 }
