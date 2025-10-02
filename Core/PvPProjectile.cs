@@ -181,7 +181,7 @@ namespace FunPvP.Core {
 		public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) { }
 		public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
 			canBuffer = true;
-			return projectile.BufferedState.attack is not IdleState;
+			return projectile.BufferedState != projectile.StateTree;
 		}
 	}
 	public class AttackSlot(Attack attack, params (ulong inputMask, AttackSlot attack)[] combos) {

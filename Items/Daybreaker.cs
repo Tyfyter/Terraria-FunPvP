@@ -85,7 +85,16 @@ namespace FunPvP.Items {
 				(InputData.GetBitMask<LeftClick, Up>(), new(GetState<Uppercut>(), 
 					(InputData.GetBitMask<LeftClick, Air>(), new(GetState<Throw>()))
 				)),
-				air1 = (InputData.GetBitMask<LeftClick, Air>(), new(GetState<Aerial1>()))
+				air1 = (InputData.GetBitMask<LeftClick, Air>(), new(GetState<Aerial1>())),
+				(InputData.GetBitMask<Down>(), new(GetState<Temp_Idle>(),
+					(InputData.GetBitMask<Forward>(), new(GetState<Temp_Idle>(),
+						(InputData.GetBitMask<Up>(), new(GetState<Temp_Idle>(),
+							(InputData.GetBitMask<LeftClick>(), new(GetState<Uppercut>(),
+								(0, new(GetState<Uppercut>()))
+							))
+						))
+					))
+				))
 			);
 			air1.attack.combos.Add((InputData.GetBitMask<LeftClick, Air>(), new(GetState<Aerial2>(), air1)));
 		}
@@ -316,6 +325,21 @@ namespace FunPvP.Items {
 			}
 			public override void Update(Player player, PvPProjectile projectile) {
 				((Daybreaker_P)projectile).DoRestingPosition();
+			}
+		}
+		public class Temp_Idle : IdleState {
+			public override void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+				projectile.Projectile.ai[1] = 15;
+			}
+			public override void Update(Player player, PvPProjectile projectile) {
+				((Daybreaker_P)projectile).DoRestingPosition();
+			}
+			public override bool CheckFinished(Player player, PvPProjectile projectile, out bool canBuffer) {
+				if (--projectile.Projectile.ai[1] <= 0) {
+					canBuffer = true;
+					return true;
+				}
+				return base.CheckFinished(player, projectile, out canBuffer);
 			}
 		}
 		public class Neutral : Attack {
@@ -732,7 +756,8 @@ namespace FunPvP.Items {
 			miscShaderData.UseOpacity(4);
 			miscShaderData.Apply();
 			int maxLength = Math.Min(proj.oldPos.Length, (int)(proj.ai[2] - proj.ai[1]));
-			if (proj.ai[0] == 145) maxLength = proj.oldPos.Length;
+			if (maxLength <= 0) return;
+			if (sword.CurrentState.attack is Daybreaker_P.Spin_Extend) maxLength = proj.oldPos.Length;
 			float[] oldRot = new float[maxLength];
 			Vector2[] oldPos = new Vector2[maxLength];
 			Vector2 move = new Vector2(Length * 0.65f, 0) * proj.direction;
