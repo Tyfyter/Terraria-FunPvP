@@ -10,6 +10,7 @@ namespace FunPvP {
 	public class FunPlayer : ModPlayer {
 		public HeldProjectile heldProjectile;
 		public bool releaseUseItem;
+		public bool releaseUseTile;
 		Vector2 preUpdateVel;
 		public (sbyte x, sbyte y) collide;
 		const sbyte yoteTime = 16;
@@ -36,6 +37,7 @@ namespace FunPvP {
 		}
 		public override bool PreItemCheck() {
 			releaseUseItem = Player.releaseUseItem;
+			releaseUseTile = Player.releaseUseTile;
 			return true;
 		}
 	}

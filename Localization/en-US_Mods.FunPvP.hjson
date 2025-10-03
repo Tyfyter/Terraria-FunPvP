@@ -10,9 +10,15 @@ Items: {
 			It's snowing on Mt.Fuji
 			'''
 	}
+
+	Crystal_Shiv: {
+		DisplayName: Crystal Shiv
+		Tooltip: ""
+	}
 }
 
 Projectiles: {
 	Daybreaker_Floor_Fire.DisplayName: Daybreaker_ Floor_ Fire
 	Daybreaker_P.DisplayName: Daybreaker_ P
+	Crystal_Shiv_P.DisplayName: Crystal Shiv P
 }

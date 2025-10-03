@@ -35,11 +35,12 @@ namespace FunPvP.Core {
 			}
 		}
 		public override bool ShouldUpdatePosition() => false;
+		public bool HitTarget { get; private set; } = false;
 		public override void AI() {
 			Player player = Main.player[Projectile.owner];
 			CurrentState.attack.Update(player, this);
 			bool endAttack = CurrentState.attack.CheckFinished(player, this, out bool canBuffer);
-			if (canBuffer && (CurrentState.GetCombo(InputData.GetBitMask(player)) ?? StateTree.GetCombo(InputData.GetBitMask(player))) is AttackSlot nextAttack) {
+			if (canBuffer && (CurrentState.GetCombo(InputData.GetBitMask(player, this)) ?? StateTree.GetCombo(InputData.GetBitMask(player, this))) is AttackSlot nextAttack) {
 				BufferedState = nextAttack;
 			}
 			if (endAttack) {
@@ -47,7 +48,9 @@ namespace FunPvP.Core {
 				CurrentState = BufferedState;
 				BufferedState = null;
 				currentState.attack.OnStart(player, this, previousState.attack);
+				HitTarget = false;
 			}
+			player.GetModPlayer<FunPlayer>().heldProjectile.Set(Projectile.whoAmI);
 		}
 		public sealed override void ModifyHitPlayer(Player target, ref Player.HurtModifiers modifiers) {
 			ModifyHit(target, new(ref modifiers));
@@ -60,10 +63,12 @@ namespace FunPvP.Core {
 		public sealed override void OnHitPlayer(Player target, Player.HurtInfo info) {
 			OnHit(target, new(info));
 			CurrentState.attack.OnHit(target, this, new(info));
+			HitTarget = true;
 		}
 		public sealed override void OnHitNPC(NPC target, NPC.HitInfo hit, int damageDone) {
 			OnHit(target, new(hit));
 			CurrentState.attack.OnHit(target, this, new(hit));
+			HitTarget = true;
 		}
 		public virtual void ModifyHit(Entity target, HitModifiers modifiers) { }
 		public virtual void OnHit(Entity target, HitInfo hitInfo) { }
@@ -76,8 +81,8 @@ namespace FunPvP.Core {
 			int bufferType = reader.ReadInt32();
 			if (Projectile.owner != Main.myPlayer) {
 				Attack oldState = currentState.attack;
-				currentState = new AttackSlot(Attack.byType[type]);
-				bufferedState = new AttackSlot(Attack.byType[bufferType]);
+				currentState = Attack.byType[type].NetSlot;
+				bufferedState = Attack.byType[bufferType].NetSlot;
 				if (currentState.attack.Type != oldState.Type) currentState.attack.OnStart(Main.player[Projectile.owner], this, oldState);
 			}
 		}
@@ -94,6 +99,10 @@ namespace FunPvP.Core {
 			useTime = CombinedHooks.TotalAnimationTime(baseUseTime, player, item);
 			knockback = knockbackMod.ApplyTo(item.knockBack);
 			armorPenetration = item.ArmorPenetration + player.GetTotalArmorPenetration(item.DamageType);
+		}
+		public void ResetIFrames() {
+			Projectile.ResetLocalNPCHitImmunity();
+			Array.Clear(Projectile.playerImmune);
 		}
 		public static TState GetState<TState>() where TState : Attack => ModContent.GetInstance<TState>();
 	}
@@ -155,16 +164,19 @@ namespace FunPvP.Core {
 	public abstract class Attack : ILoadable {
 		public static readonly List<Attack> byType = [];
 		public int Type { get; private set; }
+		public AttackSlot NetSlot { get; private set; }
 		public void Load(Mod mod) {
 			if (mod.Side != ModSide.Both) throw new InvalidOperationException("Attacks can only be added by Both-side mods");
 			Type = byType.Count;
 			byType.Add(this);
+			NetSlot = new(this);
 		}
 		public void Unload() { }
 		/// <summary>
 		/// Called on all sides when this attack is started
 		/// </summary>
 		public virtual void OnStart(Player player, PvPProjectile projectile, Attack previousState) {
+			projectile.ResetIFrames();
 			if (player.whoAmI != Main.myPlayer) return;
 			projectile.DefaultAttackSetup(player);
 		}

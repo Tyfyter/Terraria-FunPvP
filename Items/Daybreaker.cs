@@ -42,12 +42,15 @@ namespace FunPvP.Items {
 			Player.CompositeArmStretchAmount stretchAmount;
 			float armRotation;
 			if (funPlayer.heldProjectile.CheckActive(out Projectile sword)) {
-
-				if (sword.ai[0] != 0) player.direction = sword.direction;
-				else player.direction = Math.Sign((Main.MouseWorld - player.MountedCenter).X);
-				stretchAmount = Player.CompositeArmStretchAmount.Full;
-				armRotation = ((sword.position - (player.MountedCenter - new Vector2(0, 8))) * new Vector2(1, player.gravDir)).ToRotation() - MathHelper.PiOver2;
-				rightArm = (true, stretchAmount, armRotation);
+				if (sword.type == Item.shoot) {
+					player.direction = Math.Sign((Main.MouseWorld - player.MountedCenter).X);
+					stretchAmount = Player.CompositeArmStretchAmount.Full;
+					armRotation = ((sword.position - (player.MountedCenter - new Vector2(0, 8))) * new Vector2(1, player.gravDir)).ToRotation() - MathHelper.PiOver2;
+					rightArm = (true, stretchAmount, armRotation);
+				} else {
+					sword.Kill();
+					sword = null;
+				}
 			}
 			if (player.whoAmI == Main.myPlayer && !player.CCed) {
 				if (sword is null) {
@@ -142,7 +145,7 @@ namespace FunPvP.Items {
 			}
 			Projectile.rotation = (Projectile.rotation + MathHelper.TwoPi) % MathHelper.TwoPi;
 			if (doResetPoof) {
-				Projectile.ResetLocalNPCHitImmunity();
+				ResetIFrames();
 				if (Projectile.DistanceSQ(old.pos) > 8 * 8 || GeometryUtils.AngleDif(Projectile.rotation, old.rot) > 0.8f) {
 					int dustType = DustID.Clentaminator_Red;
 					Color dustColor = default;
@@ -183,7 +186,6 @@ namespace FunPvP.Items {
 					Projectile.localAI[1] = 0;
 				}
 			}
-			funPlayer.heldProjectile.Set(Projectile.whoAmI);
 			{
 				const int steps = 5;
 				Vector2 vel = new Vector2(1, 0).RotatedBy(Projectile.rotation) * (86f / steps) * Projectile.scale;
