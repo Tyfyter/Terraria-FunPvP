@@ -35,7 +35,7 @@ namespace FunPvP.Core {
 			}
 		}
 		public override bool ShouldUpdatePosition() => false;
-		public bool HitTarget { get; private set; } = false;
+		public bool HitTarget { get; protected set; } = false;
 		public override void AI() {
 			Player player = Main.player[Projectile.owner];
 			CurrentState.attack.Update(player, this);
