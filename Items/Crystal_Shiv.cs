@@ -15,7 +15,7 @@ using Terraria.ID;
 using Terraria.ModLoader;
 
 namespace FunPvP.Items {
-	public class Crystal_Shiv : ModItem
+	public class Crystal_Shiv : ModItem {
 		public static int ID { get; private set; }
 		public override void SetStaticDefaults() {
 			ID = Type;
